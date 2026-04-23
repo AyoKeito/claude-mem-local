@@ -74,7 +74,7 @@ export interface Settings {
   CLAUDE_MEM_WORKER_HOST: string;
 
   // AI Provider Configuration
-  CLAUDE_MEM_PROVIDER?: string;  // 'claude' | 'gemini' | 'openrouter'
+  CLAUDE_MEM_PROVIDER?: string;  // 'claude' | 'gemini' | 'openrouter' | 'local'
   CLAUDE_MEM_GEMINI_API_KEY?: string;
   CLAUDE_MEM_GEMINI_MODEL?: string;  // 'gemini-2.5-flash-lite' | 'gemini-2.5-flash' | 'gemini-3-flash-preview'
   CLAUDE_MEM_GEMINI_RATE_LIMITING_ENABLED?: string;  // 'true' | 'false'
@@ -82,6 +82,9 @@ export interface Settings {
   CLAUDE_MEM_OPENROUTER_MODEL?: string;
   CLAUDE_MEM_OPENROUTER_SITE_URL?: string;
   CLAUDE_MEM_OPENROUTER_APP_NAME?: string;
+  CLAUDE_MEM_LOCAL_BASE_URL?: string;
+  CLAUDE_MEM_LOCAL_MODEL?: string;
+  CLAUDE_MEM_LOCAL_API_KEY?: string;
 
   // Token Economics Display
   CLAUDE_MEM_CONTEXT_SHOW_READ_TOKENS?: string;

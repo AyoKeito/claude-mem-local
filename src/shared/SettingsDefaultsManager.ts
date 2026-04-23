@@ -31,6 +31,12 @@ export interface SettingsDefaults {
   CLAUDE_MEM_OPENROUTER_APP_NAME: string;
   CLAUDE_MEM_OPENROUTER_MAX_CONTEXT_MESSAGES: string;
   CLAUDE_MEM_OPENROUTER_MAX_TOKENS: string;
+  // Local OpenAI-compatible provider
+  CLAUDE_MEM_LOCAL_BASE_URL: string;
+  CLAUDE_MEM_LOCAL_MODEL: string;
+  CLAUDE_MEM_LOCAL_API_KEY: string;
+  CLAUDE_MEM_LOCAL_MAX_CONTEXT_MESSAGES: string;
+  CLAUDE_MEM_LOCAL_MAX_TOKENS: string;
   // System Configuration
   CLAUDE_MEM_DATA_DIR: string;
   CLAUDE_MEM_LOG_LEVEL: string;
@@ -108,6 +114,12 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_OPENROUTER_APP_NAME: 'claude-mem',  // App name for OpenRouter analytics
     CLAUDE_MEM_OPENROUTER_MAX_CONTEXT_MESSAGES: '20',  // Max messages in context window
     CLAUDE_MEM_OPENROUTER_MAX_TOKENS: '100000',  // Max estimated tokens (~100k safety limit)
+    // Local OpenAI-compatible provider (LM Studio, Ollama, etc.)
+    CLAUDE_MEM_LOCAL_BASE_URL: '',        // e.g. 'http://127.0.0.1:1234' — must be set by user
+    CLAUDE_MEM_LOCAL_MODEL: '',           // e.g. 'qwen/qwen3-27b' — must be set by user
+    CLAUDE_MEM_LOCAL_API_KEY: '',         // optional, omitted when empty
+    CLAUDE_MEM_LOCAL_MAX_CONTEXT_MESSAGES: '20',
+    CLAUDE_MEM_LOCAL_MAX_TOKENS: '100000',
     // System Configuration
     CLAUDE_MEM_DATA_DIR: join(homedir(), '.claude-mem'),
     CLAUDE_MEM_LOG_LEVEL: 'INFO',

@@ -337,7 +337,7 @@ export function ContextSettingsModal({
             >
               <FormField
                 label="AI Provider"
-                tooltip="Choose between Claude (via Agent SDK) or Gemini (via REST API)"
+                tooltip="Choose between Claude (via Agent SDK), Gemini, OpenRouter, or Local (OpenAI-compatible)"
               >
                 <select
                   value={formState.CLAUDE_MEM_PROVIDER || 'claude'}
@@ -346,6 +346,7 @@ export function ContextSettingsModal({
                   <option value="claude">Claude (uses your Claude account)</option>
                   <option value="gemini">Gemini (uses API key)</option>
                   <option value="openrouter">OpenRouter (multi-model)</option>
+                  <option value="local">Local (OpenAI-compatible)</option>
                 </select>
               </FormField>
 
@@ -447,6 +448,44 @@ export function ContextSettingsModal({
                       value={formState.CLAUDE_MEM_OPENROUTER_APP_NAME || 'claude-mem'}
                       onChange={(e) => updateSetting('CLAUDE_MEM_OPENROUTER_APP_NAME', e.target.value)}
                       placeholder="claude-mem"
+                    />
+                  </FormField>
+                </>
+              )}
+
+              {formState.CLAUDE_MEM_PROVIDER === 'local' && (
+                <>
+                  <FormField
+                    label="Base URL"
+                    tooltip="URL of your local OpenAI-compatible server (e.g. LM Studio, Ollama)"
+                  >
+                    <input
+                      type="text"
+                      value={formState.CLAUDE_MEM_LOCAL_BASE_URL || ''}
+                      onChange={(e) => updateSetting('CLAUDE_MEM_LOCAL_BASE_URL', e.target.value)}
+                      placeholder="http://127.0.0.1:1234"
+                    />
+                  </FormField>
+                  <FormField
+                    label="Model"
+                    tooltip="Model identifier as reported by your local server (e.g. qwen/qwen3-27b)"
+                  >
+                    <input
+                      type="text"
+                      value={formState.CLAUDE_MEM_LOCAL_MODEL || ''}
+                      onChange={(e) => updateSetting('CLAUDE_MEM_LOCAL_MODEL', e.target.value)}
+                      placeholder="e.g. qwen/qwen3-27b"
+                    />
+                  </FormField>
+                  <FormField
+                    label="API Key (Optional)"
+                    tooltip="Leave empty if your local server does not require authentication"
+                  >
+                    <input
+                      type="password"
+                      value={formState.CLAUDE_MEM_LOCAL_API_KEY || ''}
+                      onChange={(e) => updateSetting('CLAUDE_MEM_LOCAL_API_KEY', e.target.value)}
+                      placeholder="Leave empty for no auth"
                     />
                   </FormField>
                 </>

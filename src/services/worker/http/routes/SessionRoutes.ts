@@ -14,6 +14,7 @@ import { DatabaseManager } from '../../DatabaseManager.js';
 import { SDKAgent } from '../../SDKAgent.js';
 import { GeminiAgent, isGeminiSelected, isGeminiAvailable } from '../../GeminiAgent.js';
 import { OpenRouterAgent, isOpenRouterSelected, isOpenRouterAvailable } from '../../OpenRouterAgent.js';
+import { LocalAgent, isLocalSelected, isLocalAvailable } from '../../LocalAgent.js';
 import type { WorkerService } from '../../../worker-service.js';
 import { BaseRouteHandler } from '../BaseRouteHandler.js';
 import { SessionEventBroadcaster } from '../../events/SessionEventBroadcaster.js';
@@ -37,6 +38,7 @@ export class SessionRoutes extends BaseRouteHandler {
     private sdkAgent: SDKAgent,
     private geminiAgent: GeminiAgent,
     private openRouterAgent: OpenRouterAgent,
+    private localAgent: LocalAgent,
     private eventBroadcaster: SessionEventBroadcaster,
     private workerService: WorkerService,
     completionHandler: SessionCompletionHandler
@@ -55,7 +57,15 @@ export class SessionRoutes extends BaseRouteHandler {
    * Note: Session linking via contentSessionId allows provider switching mid-session.
    * The conversationHistory on ActiveSession maintains context across providers.
    */
-  private getActiveAgent(): SDKAgent | GeminiAgent | OpenRouterAgent {
+  private getActiveAgent(): SDKAgent | GeminiAgent | OpenRouterAgent | LocalAgent {
+    if (isLocalSelected()) {
+      if (isLocalAvailable()) {
+        logger.debug('SESSION', 'Using Local agent');
+        return this.localAgent;
+      } else {
+        throw new Error('Local provider selected but CLAUDE_MEM_LOCAL_BASE_URL is not configured.');
+      }
+    }
     if (isOpenRouterSelected()) {
       if (isOpenRouterAvailable()) {
         logger.debug('SESSION', 'Using OpenRouter agent');
@@ -78,7 +88,10 @@ export class SessionRoutes extends BaseRouteHandler {
   /**
    * Get the currently selected provider name
    */
-  private getSelectedProvider(): 'claude' | 'gemini' | 'openrouter' {
+  private getSelectedProvider(): 'claude' | 'gemini' | 'openrouter' | 'local' {
+    if (isLocalSelected() && isLocalAvailable()) {
+      return 'local';
+    }
     if (isOpenRouterSelected() && isOpenRouterAvailable()) {
       return 'openrouter';
     }
@@ -182,7 +195,7 @@ export class SessionRoutes extends BaseRouteHandler {
    */
   private startGeneratorWithProvider(
     session: ReturnType<typeof this.sessionManager.getSession>,
-    provider: 'claude' | 'gemini' | 'openrouter',
+    provider: 'claude' | 'gemini' | 'openrouter' | 'local',
     source: string
   ): void {
     if (!session) return;

@@ -104,6 +104,12 @@ export class SettingsRoutes extends BaseRouteHandler {
       'CLAUDE_MEM_OPENROUTER_APP_NAME',
       'CLAUDE_MEM_OPENROUTER_MAX_CONTEXT_MESSAGES',
       'CLAUDE_MEM_OPENROUTER_MAX_TOKENS',
+      // Local LLM Configuration
+      'CLAUDE_MEM_LOCAL_BASE_URL',
+      'CLAUDE_MEM_LOCAL_MODEL',
+      'CLAUDE_MEM_LOCAL_API_KEY',
+      'CLAUDE_MEM_LOCAL_MAX_CONTEXT_MESSAGES',
+      'CLAUDE_MEM_LOCAL_MAX_TOKENS',
       // System Configuration
       'CLAUDE_MEM_DATA_DIR',
       'CLAUDE_MEM_LOG_LEVEL',
@@ -237,9 +243,9 @@ export class SettingsRoutes extends BaseRouteHandler {
   private validateSettings(settings: any): { valid: boolean; error?: string } {
     // Validate CLAUDE_MEM_PROVIDER
     if (settings.CLAUDE_MEM_PROVIDER) {
-    const validProviders = ['claude', 'gemini', 'openrouter'];
+    const validProviders = ['claude', 'gemini', 'openrouter', 'local'];
     if (!validProviders.includes(settings.CLAUDE_MEM_PROVIDER)) {
-      return { valid: false, error: 'CLAUDE_MEM_PROVIDER must be "claude", "gemini", or "openrouter"' };
+      return { valid: false, error: 'CLAUDE_MEM_PROVIDER must be "claude", "gemini", "openrouter", or "local"' };
       }
     }
 
@@ -345,6 +351,29 @@ export class SettingsRoutes extends BaseRouteHandler {
     if (settings.CLAUDE_MEM_CONTEXT_FULL_FIELD) {
       if (!['narrative', 'facts'].includes(settings.CLAUDE_MEM_CONTEXT_FULL_FIELD)) {
         return { valid: false, error: 'CLAUDE_MEM_CONTEXT_FULL_FIELD must be "narrative" or "facts"' };
+      }
+    }
+
+    // Validate local LLM settings
+    if (settings.CLAUDE_MEM_LOCAL_BASE_URL) {
+      try {
+        new URL(settings.CLAUDE_MEM_LOCAL_BASE_URL);
+      } catch {
+        return { valid: false, error: 'CLAUDE_MEM_LOCAL_BASE_URL must be a valid URL (e.g., http://127.0.0.1:1234)' };
+      }
+    }
+
+    if (settings.CLAUDE_MEM_LOCAL_MAX_CONTEXT_MESSAGES) {
+      const count = parseInt(settings.CLAUDE_MEM_LOCAL_MAX_CONTEXT_MESSAGES, 10);
+      if (isNaN(count) || count < 1 || count > 100) {
+        return { valid: false, error: 'CLAUDE_MEM_LOCAL_MAX_CONTEXT_MESSAGES must be between 1 and 100' };
+      }
+    }
+
+    if (settings.CLAUDE_MEM_LOCAL_MAX_TOKENS) {
+      const tokens = parseInt(settings.CLAUDE_MEM_LOCAL_MAX_TOKENS, 10);
+      if (isNaN(tokens) || tokens < 1000 || tokens > 1000000) {
+        return { valid: false, error: 'CLAUDE_MEM_LOCAL_MAX_TOKENS must be between 1000 and 1000000' };
       }
     }
 
