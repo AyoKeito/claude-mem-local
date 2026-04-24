@@ -61,7 +61,7 @@
   "scripts": {
     "dev": "npm run build-and-sync",
     "build": "node scripts/sync-plugin-manifests.js && node scripts/build-hooks.js",
-    "build-and-sync": "npm run build && npm run sync-marketplace && sleep 1 && cd ~/.claude/plugins/marketplaces/thedotmack && npm run worker:restart",
+    "build-and-sync": "npm run build && npm run sync-marketplace",
     "sync-marketplace": "node scripts/sync-marketplace.cjs",
     "sync-marketplace:force": "node scripts/sync-marketplace.cjs --force",
     "build:binaries": "node scripts/build-worker-binary.js",
@@ -73,6 +73,8 @@
     "worker:stop": "bun plugin/scripts/worker-service.cjs stop",
     "worker:restart": "bun plugin/scripts/worker-service.cjs restart",
     "worker:status": "bun plugin/scripts/worker-service.cjs status",
+    "worker:nuke": "node scripts/worker-nuke.cjs",
+    "worker:reset": "node scripts/worker-nuke.cjs --restart",
     "queue": "bun scripts/check-pending-queue.ts",
     "queue:process": "bun scripts/check-pending-queue.ts --process",
     "queue:clear": "bun scripts/clear-failed-queue.ts --all --force",
