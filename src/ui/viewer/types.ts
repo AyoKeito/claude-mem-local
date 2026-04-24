@@ -85,6 +85,10 @@ export interface Settings {
   CLAUDE_MEM_LOCAL_BASE_URL?: string;
   CLAUDE_MEM_LOCAL_MODEL?: string;
   CLAUDE_MEM_LOCAL_API_KEY?: string;
+  CLAUDE_MEM_LOCAL_MAX_TOKENS?: string;
+  CLAUDE_MEM_LOCAL_MAX_CONTEXT_MESSAGES?: string;
+  CLAUDE_MEM_LOCAL_MAX_CONCURRENT?: string;
+  CLAUDE_MEM_LOCAL_FALLBACK_ENABLED?: string;
 
   // Token Economics Display
   CLAUDE_MEM_CONTEXT_SHOW_READ_TOKENS?: string;

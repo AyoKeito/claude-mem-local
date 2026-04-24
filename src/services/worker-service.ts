@@ -200,6 +200,14 @@ export class WorkerService {
     this.openRouterAgent = new OpenRouterAgent(this.dbManager, this.sessionManager);
     this.localAgent = new LocalAgent(this.dbManager, this.sessionManager);
 
+    // Wire optional Claude fallback for non-Claude providers.
+    // LocalAgent gates this behind CLAUDE_MEM_LOCAL_FALLBACK_ENABLED at call time,
+    // so setting the fallback here is safe — it only activates when the user opts in.
+    // Gemini/OpenRouter continue with their existing fallback-on-recoverable-error behavior.
+    this.localAgent.setFallbackAgent(this.sdkAgent);
+    this.geminiAgent.setFallbackAgent(this.sdkAgent);
+    this.openRouterAgent.setFallbackAgent(this.sdkAgent);
+
     this.paginationHelper = new PaginationHelper(this.dbManager);
     this.settingsManager = new SettingsManager(this.dbManager);
     this.sessionEventBroadcaster = new SessionEventBroadcaster(this.sseBroadcaster, this);

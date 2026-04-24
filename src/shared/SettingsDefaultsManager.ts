@@ -37,6 +37,8 @@ export interface SettingsDefaults {
   CLAUDE_MEM_LOCAL_API_KEY: string;
   CLAUDE_MEM_LOCAL_MAX_CONTEXT_MESSAGES: string;
   CLAUDE_MEM_LOCAL_MAX_TOKENS: string;
+  CLAUDE_MEM_LOCAL_MAX_CONCURRENT: string;  // Max parallel in-flight requests to the local server (match LM Studio queue depth)
+  CLAUDE_MEM_LOCAL_FALLBACK_ENABLED: string;  // 'true' | 'false' - fall back to Claude SDK on local failure
   // System Configuration
   CLAUDE_MEM_DATA_DIR: string;
   CLAUDE_MEM_LOG_LEVEL: string;
@@ -119,7 +121,9 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_LOCAL_MODEL: '',           // e.g. 'qwen/qwen3-27b' — must be set by user
     CLAUDE_MEM_LOCAL_API_KEY: '',         // optional, omitted when empty
     CLAUDE_MEM_LOCAL_MAX_CONTEXT_MESSAGES: '20',
-    CLAUDE_MEM_LOCAL_MAX_TOKENS: '100000',
+    CLAUDE_MEM_LOCAL_MAX_TOKENS: '80000',
+    CLAUDE_MEM_LOCAL_MAX_CONCURRENT: '1',  // Conservative default; raise to match LM Studio's configured parallelism
+    CLAUDE_MEM_LOCAL_FALLBACK_ENABLED: 'false',  // Do not silently fall back to Claude on local failure
     // System Configuration
     CLAUDE_MEM_DATA_DIR: join(homedir(), '.claude-mem'),
     CLAUDE_MEM_LOG_LEVEL: 'INFO',

@@ -488,6 +488,57 @@ export function ContextSettingsModal({
                       placeholder="Leave empty for no auth"
                     />
                   </FormField>
+                  <FormField
+                    label="Max Context Tokens"
+                    tooltip="Estimated token cap for history sent to the local model. Must stay below the context window loaded in your local server (LM Studio / Ollama). Lower this if you see 'Context size has been exceeded' errors."
+                  >
+                    <input
+                      type="number"
+                      min="1000"
+                      step="1000"
+                      value={formState.CLAUDE_MEM_LOCAL_MAX_TOKENS || '80000'}
+                      onChange={(e) => updateSetting('CLAUDE_MEM_LOCAL_MAX_TOKENS', e.target.value)}
+                      placeholder="80000"
+                    />
+                  </FormField>
+                  <FormField
+                    label="Max Context Messages"
+                    tooltip="Hard cap on conversation turns sent to the local model."
+                  >
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={formState.CLAUDE_MEM_LOCAL_MAX_CONTEXT_MESSAGES || '20'}
+                      onChange={(e) => updateSetting('CLAUDE_MEM_LOCAL_MAX_CONTEXT_MESSAGES', e.target.value)}
+                      placeholder="20"
+                    />
+                  </FormField>
+                  <FormField
+                    label="Max Parallel Requests"
+                    tooltip="Maximum number of in-flight requests claude-mem sends to the local server at once. Match this to your LM Studio / Ollama queue depth (Settings → Serve on Local Network → Parallel request handling). Set higher only if your server is configured to handle more than one request in parallel."
+                  >
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={formState.CLAUDE_MEM_LOCAL_MAX_CONCURRENT || '1'}
+                      onChange={(e) => updateSetting('CLAUDE_MEM_LOCAL_MAX_CONCURRENT', e.target.value)}
+                      placeholder="1"
+                    />
+                  </FormField>
+                  <FormField
+                    label="Fall Back to Claude on Failure"
+                    tooltip="When enabled, if the local server times out, refuses connections, or returns a 5xx error, claude-mem will silently retry the same work with the Claude SDK (Claude subscription / API billing applies). When disabled, local failures fail the session cleanly — no cloud requests, no surprise billing."
+                  >
+                    <select
+                      value={formState.CLAUDE_MEM_LOCAL_FALLBACK_ENABLED || 'false'}
+                      onChange={(e) => updateSetting('CLAUDE_MEM_LOCAL_FALLBACK_ENABLED', e.target.value)}
+                    >
+                      <option value="false">Disabled (local only)</option>
+                      <option value="true">Enabled (fall back to Claude)</option>
+                    </select>
+                  </FormField>
                 </>
               )}
 

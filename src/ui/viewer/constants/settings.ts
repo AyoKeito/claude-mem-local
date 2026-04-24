@@ -20,6 +20,10 @@ export const DEFAULT_SETTINGS = {
   CLAUDE_MEM_LOCAL_BASE_URL: '',
   CLAUDE_MEM_LOCAL_MODEL: '',
   CLAUDE_MEM_LOCAL_API_KEY: '',
+  CLAUDE_MEM_LOCAL_MAX_TOKENS: '80000',
+  CLAUDE_MEM_LOCAL_MAX_CONTEXT_MESSAGES: '20',
+  CLAUDE_MEM_LOCAL_MAX_CONCURRENT: '1',
+  CLAUDE_MEM_LOCAL_FALLBACK_ENABLED: 'false',
 
   // Token Economics — match SettingsDefaultsManager defaults (off by default to keep context lean)
   CLAUDE_MEM_CONTEXT_SHOW_READ_TOKENS: 'false',

@@ -30,8 +30,37 @@ import {
 
 // Context window management constants (defaults, overridable via settings)
 const DEFAULT_MAX_CONTEXT_MESSAGES = 20;
-const DEFAULT_MAX_ESTIMATED_TOKENS = 100000;
+const DEFAULT_MAX_ESTIMATED_TOKENS = 80000;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
+const DEFAULT_MAX_CONCURRENT = 1;
+
+/**
+ * Process-wide concurrency gate for outbound requests to the local server.
+ * Shared across all LocalAgent instances (only one exists per worker, but the
+ * semaphore is module-scoped so the limit holds across every session).
+ *
+ * Why: LM Studio / Ollama have a configurable parallel-request depth. Sending
+ * more in-flight requests than the server is configured for causes queueing,
+ * timeouts, or OOM on the model host. Cap us at the same number the server
+ * is set to (CLAUDE_MEM_LOCAL_MAX_CONCURRENT).
+ */
+const localRequestWaiters: Array<() => void> = [];
+let localRequestsInFlight = 0;
+
+async function acquireLocalSlot(maxConcurrent: number): Promise<void> {
+  if (localRequestsInFlight < maxConcurrent) {
+    localRequestsInFlight++;
+    return;
+  }
+  await new Promise<void>(resolve => localRequestWaiters.push(resolve));
+  localRequestsInFlight++;
+}
+
+function releaseLocalSlot(): void {
+  localRequestsInFlight--;
+  const next = localRequestWaiters.shift();
+  if (next) next();
+}
 
 // OpenAI-compatible message format
 interface OpenAIMessage {
@@ -284,14 +313,24 @@ export class LocalAgent {
       throw error;
     }
 
-    if (shouldFallbackToClaude(error) && this.fallbackAgent) {
-      logger.warn('SDK', 'Local API failed, falling back to Claude SDK', {
+    const fallbackSettings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+    const fallbackEnabled = fallbackSettings.CLAUDE_MEM_LOCAL_FALLBACK_ENABLED === 'true';
+
+    if (fallbackEnabled && shouldFallbackToClaude(error) && this.fallbackAgent) {
+      logger.warn('SDK', 'Local API failed, falling back to Claude SDK (fallback enabled)', {
         sessionDbId: session.sessionDbId,
         error: error instanceof Error ? error.message : String(error),
         historyLength: session.conversationHistory.length
       });
       await this.fallbackAgent.startSession(session, worker);
       return;
+    }
+
+    if (!fallbackEnabled && shouldFallbackToClaude(error)) {
+      logger.warn('SDK', 'Local API failed; fallback to Claude is disabled (CLAUDE_MEM_LOCAL_FALLBACK_ENABLED=false) — failing session', {
+        sessionDbId: session.sessionDbId,
+        error: error instanceof Error ? error.message : String(error)
+      });
     }
 
     logger.failure('SDK', 'LocalAgent error', { sessionDbId: session.sessionDbId }, error instanceof Error ? error : new Error(String(error)));
@@ -372,23 +411,33 @@ export class LocalAgent {
       headers['Authorization'] = `Bearer ${apiKey}`;
     }
 
-    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature: 0.3,
-        max_tokens: 4096,
-      }),
-    });
+    const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+    const maxConcurrent = Math.max(1, parseInt(settings.CLAUDE_MEM_LOCAL_MAX_CONCURRENT, 10) || DEFAULT_MAX_CONCURRENT);
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Local API error: ${response.status} - ${errorText}`);
+    await acquireLocalSlot(maxConcurrent);
+    let response: Response;
+    let data: LocalResponse;
+    try {
+      response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature: 0.3,
+          max_tokens: 4096,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Local API error: ${response.status} - ${errorText}`);
+      }
+
+      data = await response.json() as LocalResponse;
+    } finally {
+      releaseLocalSlot();
     }
-
-    const data = await response.json() as LocalResponse;
 
     if (data.error) {
       throw new Error(`Local API error: ${data.error.code} - ${data.error.message}`);
