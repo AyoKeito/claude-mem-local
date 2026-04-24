@@ -25,7 +25,40 @@ import { logger } from '../../../utils/logger.js';
 export function shouldFallbackToClaude(error: unknown): boolean {
   const message = getErrorMessage(error);
 
+  // Overflow / oversized-prompt errors are unfixable by retrying — routing them
+  // to Claude would just burn the fallback path on a request that's structurally
+  // too big. Short-circuit.
+  if (isContextOverflowError(error)) return false;
+
   return FALLBACK_ERROR_PATTERNS.some(pattern => message.includes(pattern));
+}
+
+/**
+ * Detect context-window / oversized-prompt errors across providers. Claude
+ * emits "prompt is too long" / "context window"; local OpenAI-compatible
+ * servers (LM Studio, Ollama, llama.cpp) return different phrasings depending
+ * on the loaded runtime. Catching all of them lets callers abort cleanly
+ * instead of retry-looping or falling back.
+ */
+const CONTEXT_OVERFLOW_PATTERNS = [
+  'prompt is too long',
+  'Prompt is too long',
+  'context window',
+  'context size has been exceeded',
+  'context size exceeded',
+  'context length',
+  'context_length_exceeded',
+  'token limit exceeded',
+  'exceeds context',
+  'maximum context',
+  'n_ctx',                     // llama.cpp
+  'out of memory',             // OOM on local backend
+  'CUDA out of memory',
+];
+
+export function isContextOverflowError(error: unknown): boolean {
+  const message = getErrorMessage(error).toLowerCase();
+  return CONTEXT_OVERFLOW_PATTERNS.some(p => message.includes(p.toLowerCase()));
 }
 
 /**

@@ -38,7 +38,117 @@ export class SettingsRoutes extends BaseRouteHandler {
     app.get('/api/branch/status', this.handleGetBranchStatus.bind(this));
     app.post('/api/branch/switch', this.handleSwitchBranch.bind(this));
     app.post('/api/branch/update', this.handleUpdateBranch.bind(this));
+
+    // Local provider connection test
+    app.post('/api/settings/test-local-connection', this.handleTestLocalConnection.bind(this));
   }
+
+  /**
+   * POST /api/settings/test-local-connection
+   * Body: { baseUrl, model, apiKey? }
+   * Verifies reachability, model availability, and probes the context window.
+   */
+  private handleTestLocalConnection = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
+    const { baseUrl, model, apiKey } = (req.body || {}) as {
+      baseUrl?: string; model?: string; apiKey?: string;
+    };
+
+    if (!baseUrl || typeof baseUrl !== 'string') {
+      res.status(400).json({ ok: false, error: 'baseUrl is required' });
+      return;
+    }
+    try { new URL(baseUrl); } catch {
+      res.status(400).json({ ok: false, error: 'baseUrl is not a valid URL' });
+      return;
+    }
+
+    const cleanBaseUrl = baseUrl.replace(/\/+$/, '');
+    const headers: Record<string, string> = { 'Accept': 'application/json' };
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+    const tryFetch = async (url: string, init?: RequestInit): Promise<{ ok: boolean; status?: number; data?: any; error?: string }> => {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), 5000);
+      try {
+        const r = await fetch(url, { headers, signal: ctl.signal, ...init });
+        const txt = await r.text();
+        let data: any = undefined;
+        try { data = txt ? JSON.parse(txt) : undefined; } catch { /* leave as text */ }
+        return { ok: r.ok, status: r.status, data: data ?? txt };
+      } catch (e) {
+        return { ok: false, error: (e as Error)?.message || String(e) };
+      } finally {
+        clearTimeout(t);
+      }
+    };
+
+    // 1. /v1/models — is the server reachable and does it list this model?
+    const models = await tryFetch(`${cleanBaseUrl}/v1/models`);
+    if (!models.ok) {
+      res.json({
+        ok: false,
+        reachable: false,
+        error: models.error || `Server returned ${models.status}`,
+      });
+      return;
+    }
+
+    const modelList: string[] = Array.isArray(models.data?.data)
+      ? models.data.data.map((m: any) => m?.id).filter(Boolean)
+      : [];
+    const modelFound = model ? modelList.includes(model) : undefined;
+
+    // 2. Probe for context length (LM Studio → Ollama → /v1/models fallback)
+    let contextLength: number | null = null;
+    let contextSource: string | null = null;
+
+    if (model) {
+      const lms = await tryFetch(`${cleanBaseUrl}/api/v0/models/${encodeURIComponent(model)}`);
+      const lmsCtx = lms.ok ? (lms.data?.loaded_context_length ?? lms.data?.max_context_length) : undefined;
+      if (typeof lmsCtx === 'number' && lmsCtx > 0) {
+        contextLength = lmsCtx;
+        contextSource = 'lmstudio';
+      }
+
+      if (contextLength == null) {
+        const ollama = await tryFetch(`${cleanBaseUrl}/api/show`, {
+          method: 'POST',
+          headers: { ...headers, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: model }),
+        });
+        const modelInfo = ollama.ok ? ollama.data?.model_info : undefined;
+        if (modelInfo && typeof modelInfo === 'object') {
+          const ctxKey = Object.keys(modelInfo).find(k => k.endsWith('.context_length'));
+          const ctx = ctxKey ? modelInfo[ctxKey] : undefined;
+          if (typeof ctx === 'number' && ctx > 0) {
+            contextLength = ctx;
+            contextSource = 'ollama';
+          }
+        }
+      }
+
+      if (contextLength == null) {
+        const entry = modelList.length
+          ? (models.data?.data as any[]).find(m => m?.id === model)
+          : undefined;
+        const oaiCtx = entry?.context_length ?? entry?.max_context_length;
+        if (typeof oaiCtx === 'number' && oaiCtx > 0) {
+          contextLength = oaiCtx;
+          contextSource = 'openai';
+        }
+      }
+    }
+
+    res.json({
+      ok: true,
+      reachable: true,
+      modelsCount: modelList.length,
+      modelFound,
+      availableModels: modelList.slice(0, 20),
+      contextLength,
+      contextSource,
+    });
+  });
 
   /**
    * Get environment settings (from ~/.claude-mem/settings.json)
@@ -110,6 +220,17 @@ export class SettingsRoutes extends BaseRouteHandler {
       'CLAUDE_MEM_LOCAL_API_KEY',
       'CLAUDE_MEM_LOCAL_MAX_CONTEXT_MESSAGES',
       'CLAUDE_MEM_LOCAL_MAX_TOKENS',
+      'CLAUDE_MEM_LOCAL_MAX_CONCURRENT',
+      'CLAUDE_MEM_LOCAL_FALLBACK_ENABLED',
+      'CLAUDE_MEM_LOCAL_REQUEST_TIMEOUT_MS',
+      'CLAUDE_MEM_LOCAL_ENABLE_THINKING',
+      'CLAUDE_MEM_LOCAL_TEMPERATURE',
+      'CLAUDE_MEM_LOCAL_TOP_P',
+      'CLAUDE_MEM_LOCAL_TOP_K',
+      'CLAUDE_MEM_LOCAL_MIN_P',
+      'CLAUDE_MEM_LOCAL_PRESENCE_PENALTY',
+      'CLAUDE_MEM_LOCAL_REPETITION_PENALTY',
+      'CLAUDE_MEM_LOCAL_MAX_OUTPUT_TOKENS',
       // System Configuration
       'CLAUDE_MEM_DATA_DIR',
       'CLAUDE_MEM_LOG_LEVEL',
@@ -371,10 +492,47 @@ export class SettingsRoutes extends BaseRouteHandler {
     }
 
     if (settings.CLAUDE_MEM_LOCAL_MAX_TOKENS) {
-      const tokens = parseInt(settings.CLAUDE_MEM_LOCAL_MAX_TOKENS, 10);
-      if (isNaN(tokens) || tokens < 1000 || tokens > 1000000) {
-        return { valid: false, error: 'CLAUDE_MEM_LOCAL_MAX_TOKENS must be between 1000 and 1000000' };
+      const raw = String(settings.CLAUDE_MEM_LOCAL_MAX_TOKENS).trim().toLowerCase();
+      if (raw !== 'auto') {
+        const tokens = parseInt(raw, 10);
+        if (isNaN(tokens) || tokens < 1000 || tokens > 1000000) {
+          return { valid: false, error: 'CLAUDE_MEM_LOCAL_MAX_TOKENS must be "auto" or a number between 1000 and 1000000' };
+        }
       }
+    }
+
+    if (settings.CLAUDE_MEM_LOCAL_REQUEST_TIMEOUT_MS) {
+      const ms = parseInt(settings.CLAUDE_MEM_LOCAL_REQUEST_TIMEOUT_MS, 10);
+      if (isNaN(ms) || ms < 5000 || ms > 3600000) {
+        return { valid: false, error: 'CLAUDE_MEM_LOCAL_REQUEST_TIMEOUT_MS must be between 5000 and 3600000 (5s – 1h)' };
+      }
+    }
+
+    const samplingRanges: Record<string, [number, number]> = {
+      CLAUDE_MEM_LOCAL_TEMPERATURE: [0, 2],
+      CLAUDE_MEM_LOCAL_TOP_P: [0, 1],
+      CLAUDE_MEM_LOCAL_TOP_K: [-1, 1000],
+      CLAUDE_MEM_LOCAL_MIN_P: [0, 1],
+      CLAUDE_MEM_LOCAL_PRESENCE_PENALTY: [-2, 2],
+      CLAUDE_MEM_LOCAL_REPETITION_PENALTY: [0.5, 2],
+    };
+    for (const [key, [min, max]] of Object.entries(samplingRanges)) {
+      if (settings[key] !== undefined && settings[key] !== '') {
+        const n = parseFloat(settings[key]);
+        if (isNaN(n) || n < min || n > max) {
+          return { valid: false, error: `${key} must be a number between ${min} and ${max}` };
+        }
+      }
+    }
+    if (settings.CLAUDE_MEM_LOCAL_MAX_OUTPUT_TOKENS) {
+      const n = parseInt(settings.CLAUDE_MEM_LOCAL_MAX_OUTPUT_TOKENS, 10);
+      if (isNaN(n) || n < 256 || n > 100000) {
+        return { valid: false, error: 'CLAUDE_MEM_LOCAL_MAX_OUTPUT_TOKENS must be between 256 and 100000' };
+      }
+    }
+    if (settings.CLAUDE_MEM_LOCAL_ENABLE_THINKING !== undefined &&
+        !['true', 'false'].includes(String(settings.CLAUDE_MEM_LOCAL_ENABLE_THINKING))) {
+      return { valid: false, error: 'CLAUDE_MEM_LOCAL_ENABLE_THINKING must be "true" or "false"' };
     }
 
     // Validate CLAUDE_MEM_OPENROUTER_MAX_CONTEXT_MESSAGES

@@ -10,6 +10,7 @@
  */
 
 import { execSync } from 'child_process';
+import { randomUUID } from 'crypto';
 import { CorpusStore } from './CorpusStore.js';
 import { CorpusRenderer } from './CorpusRenderer.js';
 import type { CorpusFile, QueryResult } from './types.js';
@@ -18,10 +19,15 @@ import { SettingsDefaultsManager } from '../../../shared/SettingsDefaultsManager
 import { USER_SETTINGS_PATH, OBSERVER_SESSIONS_DIR, ensureDir } from '../../../shared/paths.js';
 import { buildIsolatedEnv } from '../../../shared/EnvManager.js';
 import { sanitizeEnv } from '../../../supervisor/env-sanitizer.js';
+import { resolveMaxTokens } from '../LocalAgent.js';
 
 // Import Agent SDK (V1 API — same pattern as SDKAgent.ts)
 // @ts-ignore - Agent SDK types may not be available
 import { query } from '@anthropic-ai/claude-agent-sdk';
+
+// Marker prefix for session IDs created by the local provider path. The Claude
+// SDK can't resume these (and shouldn't try), so we fast-path them.
+const LOCAL_SESSION_PREFIX = 'local-';
 
 // Knowledge agent is Q&A only — all 12 tools blocked
 // Copied from SDKAgent.ts:55-67
@@ -56,6 +62,10 @@ export class KnowledgeAgent {
    * @returns The session_id for future resume queries
    */
   async prime(corpus: CorpusFile): Promise<string> {
+    if (this.isLocalProvider()) {
+      return this.primeLocal(corpus);
+    }
+
     const renderedCorpus = this.renderer.renderCorpus(corpus);
 
     const primePrompt = [
@@ -125,6 +135,22 @@ export class KnowledgeAgent {
   async query(corpus: CorpusFile, question: string): Promise<QueryResult> {
     if (!corpus.session_id) {
       throw new Error(`Corpus "${corpus.name}" has no session — call prime first`);
+    }
+
+    // Local-provider sessions don't use Claude's resume; answer from a fresh
+    // context-loaded call each time. If the user switches providers we
+    // transparently reprime on the other side.
+    if (corpus.session_id.startsWith(LOCAL_SESSION_PREFIX)) {
+      if (this.isLocalProvider()) {
+        return this.executeQueryLocal(corpus, question);
+      }
+      logger.info('WORKER', `Corpus "${corpus.name}" was primed on local; provider is now Claude — repriming on Claude side`);
+      await this.prime(corpus);
+    } else if (this.isLocalProvider()) {
+      logger.info('WORKER', `Corpus "${corpus.name}" was primed on Claude; provider is now local — repriming on local side`);
+      await this.prime(corpus);
+      const refreshed = this.corpusStore.read(corpus.name);
+      if (refreshed?.session_id) return this.executeQueryLocal(refreshed, question);
     }
 
     try {
@@ -230,11 +256,134 @@ export class KnowledgeAgent {
   }
 
   /**
-   * Get model ID from user settings — same as SDKAgent.getModelId()
+   * Get model ID from user settings. Provider-aware: when the user has selected
+   * the local provider we return CLAUDE_MEM_LOCAL_MODEL; otherwise the Claude
+   * default. The Claude SDK path never reads this for local (it takes a
+   * separate code path), but we keep it correct so anything else reading the
+   * return value gets the right model for the active provider.
    */
   private getModelId(): string {
     const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+    if (settings.CLAUDE_MEM_PROVIDER === 'local' && settings.CLAUDE_MEM_LOCAL_MODEL) {
+      return settings.CLAUDE_MEM_LOCAL_MODEL;
+    }
     return settings.CLAUDE_MEM_MODEL;
+  }
+
+  private isLocalProvider(): boolean {
+    const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+    return settings.CLAUDE_MEM_PROVIDER === 'local'
+      && !!settings.CLAUDE_MEM_LOCAL_BASE_URL
+      && !!settings.CLAUDE_MEM_LOCAL_MODEL;
+  }
+
+  /**
+   * Local-provider prime: no subprocess, no SDK. Just mint a session_id; the
+   * corpus body is re-injected on every query since local models rebuild
+   * context fresh each call. This side-steps the Claude-subprocess dependency
+   * and keeps the code path pure HTTP → local OpenAI-compatible server.
+   */
+  private async primeLocal(corpus: CorpusFile): Promise<string> {
+    const sessionId = `${LOCAL_SESSION_PREFIX}${corpus.name}-${randomUUID()}`;
+    corpus.session_id = sessionId;
+    this.corpusStore.write(corpus);
+    logger.info('WORKER', `Knowledge agent primed locally for corpus "${corpus.name}"`, { sessionId } as any);
+    return sessionId;
+  }
+
+  /**
+   * Local-provider query: rebuilds [system=corpus, user=question] each call and
+   * hits the local OpenAI-compatible server. Uses the same sampling and
+   * timeout settings configured for LocalAgent so observation extraction and
+   * knowledge Q&A behave consistently.
+   */
+  private async executeQueryLocal(corpus: CorpusFile, question: string): Promise<QueryResult> {
+    const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+    const baseUrl = (settings.CLAUDE_MEM_LOCAL_BASE_URL || '').replace(/\/+$/, '');
+    const model = settings.CLAUDE_MEM_LOCAL_MODEL || '';
+    const apiKey = settings.CLAUDE_MEM_LOCAL_API_KEY || '';
+    if (!baseUrl || !model) {
+      throw new Error('Local provider selected but CLAUDE_MEM_LOCAL_BASE_URL / CLAUDE_MEM_LOCAL_MODEL not configured.');
+    }
+
+    const rendered = this.renderer.renderCorpus(corpus);
+    const systemContent = [
+      corpus.system_prompt,
+      '',
+      'Here is your complete knowledge base:',
+      '',
+      rendered
+    ].join('\n');
+
+    // Resolve context ceiling (AUTO probes the server). If the corpus overruns,
+    // the local model will error loudly — better than silent truncation for Q&A,
+    // since a half-corpus answer is misleading.
+    const { value: maxTokens } = await resolveMaxTokens(
+      settings.CLAUDE_MEM_LOCAL_MAX_TOKENS,
+      baseUrl, model, apiKey
+    );
+
+    const num = (raw: string | undefined, fb: number) => {
+      const n = parseFloat((raw ?? '').toString());
+      return isNaN(n) ? fb : n;
+    };
+    const body: Record<string, any> = {
+      model,
+      messages: [
+        { role: 'system', content: systemContent },
+        { role: 'user', content: question }
+      ],
+      temperature: num(settings.CLAUDE_MEM_LOCAL_TEMPERATURE, 0.7),
+      top_p: num(settings.CLAUDE_MEM_LOCAL_TOP_P, 0.8),
+      max_tokens: Math.max(256, parseInt(settings.CLAUDE_MEM_LOCAL_MAX_OUTPUT_TOKENS, 10) || 4096),
+    };
+    const top_k = num(settings.CLAUDE_MEM_LOCAL_TOP_K, 20);
+    if (top_k > 0) body.top_k = top_k;
+    const min_p = num(settings.CLAUDE_MEM_LOCAL_MIN_P, 0);
+    if (min_p > 0) body.min_p = min_p;
+    const pp = num(settings.CLAUDE_MEM_LOCAL_PRESENCE_PENALTY, 1.5);
+    if (pp !== 0) body.presence_penalty = pp;
+    const rp = num(settings.CLAUDE_MEM_LOCAL_REPETITION_PENALTY, 1.0);
+    if (rp !== 1.0) body.repetition_penalty = rp;
+    body.chat_template_kwargs = {
+      enable_thinking: String(settings.CLAUDE_MEM_LOCAL_ENABLE_THINKING || 'false').toLowerCase() === 'true'
+    };
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+    const timeoutMs = Math.max(5_000, parseInt(settings.CLAUDE_MEM_LOCAL_REQUEST_TIMEOUT_MS, 10) || 300_000);
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), timeoutMs);
+
+    logger.debug('WORKER', `Knowledge query (local) for corpus "${corpus.name}"`, {
+      model, maxTokens, corpusChars: rendered.length, questionChars: question.length
+    });
+
+    try {
+      let resp: Response;
+      try {
+        resp = await fetch(`${baseUrl}/v1/chat/completions`, {
+          method: 'POST', headers, body: JSON.stringify(body), signal: ctl.signal
+        });
+      } catch (err) {
+        if ((err as Error)?.name === 'AbortError' && ctl.signal.aborted) {
+          throw new Error(`Local API timed out after ${timeoutMs}ms while answering knowledge query`);
+        }
+        throw err;
+      }
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(`Local API error: ${resp.status} - ${text}`);
+      }
+      const data: any = await resp.json();
+      const raw = data?.choices?.[0]?.message?.content ?? '';
+      // Strip Qwen3.x <think>…</think> scaffolding if the server didn't honor enable_thinking=false
+      const answer = raw.replace(/<think>[\s\S]*?<\/think>\s*/gi, '').replace(/^<think>[\s\S]*$/i, '').trim();
+      return { answer, session_id: corpus.session_id! };
+    } finally {
+      clearTimeout(t);
+    }
   }
 
   /**

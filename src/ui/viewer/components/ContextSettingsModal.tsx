@@ -12,6 +12,68 @@ interface ContextSettingsModalProps {
   saveStatus: string;
 }
 
+// Local provider connection tester — probes /api/settings/test-local-connection
+function LocalConnectionTester({ baseUrl, model, apiKey }: { baseUrl: string; model: string; apiKey: string }) {
+  const [status, setStatus] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle');
+  const [message, setMessage] = useState<string>('');
+
+  const runTest = useCallback(async () => {
+    if (!baseUrl) {
+      setStatus('fail');
+      setMessage('Set a Base URL first');
+      return;
+    }
+    setStatus('testing');
+    setMessage('Connecting…');
+    try {
+      const resp = await fetch('/api/settings/test-local-connection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseUrl, model, apiKey }),
+      });
+      const data: any = await resp.json();
+      if (!data.ok || !data.reachable) {
+        setStatus('fail');
+        setMessage(`Unreachable: ${data.error || 'no response'}`);
+        return;
+      }
+      const parts: string[] = [];
+      parts.push(`${data.modelsCount} model${data.modelsCount === 1 ? '' : 's'} available`);
+      if (model) {
+        parts.push(data.modelFound ? `model "${model}" found` : `model "${model}" NOT in list`);
+      }
+      if (data.contextLength) {
+        parts.push(`context ${data.contextLength.toLocaleString()} tokens (via ${data.contextSource})`);
+      } else if (model) {
+        parts.push('context length unknown — server did not report it');
+      }
+      setStatus(data.modelFound === false ? 'fail' : 'ok');
+      setMessage(parts.join(' · '));
+    } catch (e: any) {
+      setStatus('fail');
+      setMessage(`Error: ${e?.message || String(e)}`);
+    }
+  }, [baseUrl, model, apiKey]);
+
+  const color = status === 'ok' ? 'var(--success, #4caf50)' :
+                status === 'fail' ? 'var(--error, #e53935)' :
+                status === 'testing' ? 'var(--muted, #888)' : 'var(--muted, #888)';
+
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+      <button
+        type="button"
+        onClick={runTest}
+        disabled={status === 'testing'}
+        style={{ padding: '4px 10px' }}
+      >
+        {status === 'testing' ? 'Testing…' : 'Test Connection'}
+      </button>
+      {message && <span style={{ color, fontSize: 12 }}>{message}</span>}
+    </div>
+  );
+}
+
 // Collapsible section component
 function CollapsibleSection({
   title,
@@ -455,6 +517,11 @@ export function ContextSettingsModal({
 
               {formState.CLAUDE_MEM_PROVIDER === 'local' && (
                 <>
+                  <LocalConnectionTester
+                    baseUrl={formState.CLAUDE_MEM_LOCAL_BASE_URL || ''}
+                    model={formState.CLAUDE_MEM_LOCAL_MODEL || ''}
+                    apiKey={formState.CLAUDE_MEM_LOCAL_API_KEY || ''}
+                  />
                   <FormField
                     label="Base URL"
                     tooltip="URL of your local OpenAI-compatible server (e.g. LM Studio, Ollama)"
@@ -490,16 +557,35 @@ export function ContextSettingsModal({
                   </FormField>
                   <FormField
                     label="Max Context Tokens"
-                    tooltip="Estimated token cap for history sent to the local model. Must stay below the context window loaded in your local server (LM Studio / Ollama). Lower this if you see 'Context size has been exceeded' errors."
+                    tooltip="'Auto' probes your local server for the loaded model's context length (LM Studio: loaded_context_length; Ollama: model_info.*.context_length) and caches it for 60s. Pick 'Manual' to override with a fixed number, e.g. if your estimator undercounts or your server doesn't report it."
                   >
-                    <input
-                      type="number"
-                      min="1000"
-                      step="1000"
-                      value={formState.CLAUDE_MEM_LOCAL_MAX_TOKENS || '80000'}
-                      onChange={(e) => updateSetting('CLAUDE_MEM_LOCAL_MAX_TOKENS', e.target.value)}
-                      placeholder="80000"
-                    />
+                    {(() => {
+                      const raw = (formState.CLAUDE_MEM_LOCAL_MAX_TOKENS ?? 'auto').toString();
+                      const isAuto = raw.trim().toLowerCase() === 'auto' || raw === '';
+                      return (
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <select
+                            value={isAuto ? 'auto' : 'manual'}
+                            onChange={(e) => updateSetting('CLAUDE_MEM_LOCAL_MAX_TOKENS', e.target.value === 'auto' ? 'auto' : '60000')}
+                            style={{ flex: '0 0 auto' }}
+                          >
+                            <option value="auto">Auto (probe server)</option>
+                            <option value="manual">Manual</option>
+                          </select>
+                          {!isAuto && (
+                            <input
+                              type="number"
+                              min="1000"
+                              step="1000"
+                              value={raw}
+                              onChange={(e) => updateSetting('CLAUDE_MEM_LOCAL_MAX_TOKENS', e.target.value)}
+                              placeholder="60000"
+                              style={{ flex: 1 }}
+                            />
+                          )}
+                        </div>
+                      );
+                    })()}
                   </FormField>
                   <FormField
                     label="Max Context Messages"
@@ -538,6 +624,102 @@ export function ContextSettingsModal({
                       <option value="false">Disabled (local only)</option>
                       <option value="true">Enabled (fall back to Claude)</option>
                     </select>
+                  </FormField>
+                  <FormField
+                    label="Request Timeout (ms)"
+                    tooltip="Per-request timeout for calls to the local server. If LM Studio / Ollama hangs on a generation, claude-mem aborts the request after this many milliseconds instead of waiting forever. 300000 (5 min) is a generous default for large models. Range: 5000–3600000."
+                  >
+                    <input
+                      type="number"
+                      min="5000"
+                      max="3600000"
+                      step="1000"
+                      value={formState.CLAUDE_MEM_LOCAL_REQUEST_TIMEOUT_MS || '300000'}
+                      onChange={(e) => updateSetting('CLAUDE_MEM_LOCAL_REQUEST_TIMEOUT_MS', e.target.value)}
+                      placeholder="300000"
+                    />
+                  </FormField>
+                  <FormField
+                    label="Enable Thinking Mode"
+                    tooltip="Qwen3.x-style reasoning mode. When disabled (recommended for observation extraction), the model skips <think>…</think> scaffolding and emits structured output directly — faster, cheaper, and avoids parser noise. Servers that don't support chat_template_kwargs.enable_thinking will ignore this flag."
+                  >
+                    <select
+                      value={formState.CLAUDE_MEM_LOCAL_ENABLE_THINKING || 'false'}
+                      onChange={(e) => updateSetting('CLAUDE_MEM_LOCAL_ENABLE_THINKING', e.target.value)}
+                    >
+                      <option value="false">Disabled (recommended)</option>
+                      <option value="true">Enabled</option>
+                    </select>
+                  </FormField>
+                  <FormField
+                    label="Temperature"
+                    tooltip="Sampling temperature. Qwen3.6 instruct mode: 0.7. Lower values (0.2–0.4) favor deterministic XML; higher (0.7+) matches vendor defaults."
+                  >
+                    <input
+                      type="number" min="0" max="2" step="0.05"
+                      value={formState.CLAUDE_MEM_LOCAL_TEMPERATURE || '0.7'}
+                      onChange={(e) => updateSetting('CLAUDE_MEM_LOCAL_TEMPERATURE', e.target.value)}
+                    />
+                  </FormField>
+                  <FormField
+                    label="top_p"
+                    tooltip="Nucleus sampling. Qwen3.6 instruct: 0.8. Thinking mode: 0.95."
+                  >
+                    <input
+                      type="number" min="0" max="1" step="0.01"
+                      value={formState.CLAUDE_MEM_LOCAL_TOP_P || '0.8'}
+                      onChange={(e) => updateSetting('CLAUDE_MEM_LOCAL_TOP_P', e.target.value)}
+                    />
+                  </FormField>
+                  <FormField
+                    label="top_k"
+                    tooltip="Top-k sampling. Qwen3.6: 20. Set to -1 to disable."
+                  >
+                    <input
+                      type="number" min="-1" max="1000" step="1"
+                      value={formState.CLAUDE_MEM_LOCAL_TOP_K || '20'}
+                      onChange={(e) => updateSetting('CLAUDE_MEM_LOCAL_TOP_K', e.target.value)}
+                    />
+                  </FormField>
+                  <FormField
+                    label="min_p"
+                    tooltip="Minimum probability cutoff (llama.cpp / LM Studio). Qwen3.6: 0.0."
+                  >
+                    <input
+                      type="number" min="0" max="1" step="0.01"
+                      value={formState.CLAUDE_MEM_LOCAL_MIN_P || '0.0'}
+                      onChange={(e) => updateSetting('CLAUDE_MEM_LOCAL_MIN_P', e.target.value)}
+                    />
+                  </FormField>
+                  <FormField
+                    label="presence_penalty"
+                    tooltip="Reduces token repetition. Qwen3.6 instruct: 1.5 (0–2 safe; above 1.5 can cause language mixing)."
+                  >
+                    <input
+                      type="number" min="-2" max="2" step="0.1"
+                      value={formState.CLAUDE_MEM_LOCAL_PRESENCE_PENALTY || '1.5'}
+                      onChange={(e) => updateSetting('CLAUDE_MEM_LOCAL_PRESENCE_PENALTY', e.target.value)}
+                    />
+                  </FormField>
+                  <FormField
+                    label="repetition_penalty"
+                    tooltip="llama.cpp / LM Studio repetition penalty. Qwen3.6: 1.0 (off)."
+                  >
+                    <input
+                      type="number" min="0.5" max="2" step="0.05"
+                      value={formState.CLAUDE_MEM_LOCAL_REPETITION_PENALTY || '1.0'}
+                      onChange={(e) => updateSetting('CLAUDE_MEM_LOCAL_REPETITION_PENALTY', e.target.value)}
+                    />
+                  </FormField>
+                  <FormField
+                    label="Max Output Tokens"
+                    tooltip="Maximum tokens the model may generate per call. 4096 is enough for observation extraction; raise for summary passes on long sessions."
+                  >
+                    <input
+                      type="number" min="256" max="100000" step="256"
+                      value={formState.CLAUDE_MEM_LOCAL_MAX_OUTPUT_TOKENS || '4096'}
+                      onChange={(e) => updateSetting('CLAUDE_MEM_LOCAL_MAX_OUTPUT_TOKENS', e.target.value)}
+                    />
                   </FormField>
                 </>
               )}

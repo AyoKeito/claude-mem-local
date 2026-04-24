@@ -33,15 +33,31 @@ export interface ParsedSummary {
 export function parseObservations(text: string, correlationId?: string): ParsedObservation[] {
   const observations: ParsedObservation[] = [];
 
-  // Match <observation>...</observation> blocks (non-greedy)
-  const observationRegex = /<observation>([\s\S]*?)<\/observation>/g;
+  // Match <observation>...</observation> blocks (non-greedy). Allow an optional
+  // attribute form like <observation type="bugfix"> — local models (Qwen,
+  // Mistral, etc.) sometimes inline the type as an attribute despite the prompt.
+  const observationRegex = /<observation\b([^>]*)>([\s\S]*?)<\/observation>/gi;
 
   let match;
   while ((match = observationRegex.exec(text)) !== null) {
-    const obsContent = match[1];
+    const obsAttrs = match[1] || '';
+    const obsContent = match[2];
 
     // Extract all fields
-    const type = extractField(obsContent, 'type');
+    let type = extractField(obsContent, 'type');
+    // Fallback 1: attribute form — <observation type="..."> or type='...'
+    if (!type) {
+      const attr = /\btype\s*=\s*["']([^"']+)["']/i.exec(obsAttrs);
+      if (attr) type = attr[1].trim();
+    }
+    // Fallback 2: case-insensitive element search — <Type> / <TYPE>
+    if (!type) {
+      const ci = /<type\b[^>]*>([\s\S]*?)<\/type>/i.exec(obsContent);
+      if (ci) {
+        const v = ci[1].trim();
+        if (v) type = v;
+      }
+    }
     const title = extractField(obsContent, 'title');
     const subtitle = extractField(obsContent, 'subtitle');
     const narrative = extractField(obsContent, 'narrative');
@@ -59,13 +75,21 @@ export function parseObservations(text: string, correlationId?: string): ParsedO
     const fallbackType = validTypes[0]; // First type in mode's list is the fallback
     let finalType = fallbackType;
     if (type) {
-      if (validTypes.includes(type.trim())) {
-        finalType = type.trim();
+      const normalizedType = type.trim().toLowerCase();
+      const matched = validTypes.find(t => t.toLowerCase() === normalizedType);
+      if (matched) {
+        finalType = matched;
       } else {
-        logger.error('PARSER', `Invalid observation type: ${type}, using "${fallbackType}"`, { correlationId });
+        logger.warn('PARSER', `Invalid observation type: ${type}, using "${fallbackType}"`, { correlationId } as any);
       }
     } else {
-      logger.error('PARSER', `Observation missing type field, using "${fallbackType}"`, { correlationId });
+      // Downgraded from ERROR → WARN: local models often omit <type>, and the
+      // fallback keeps the observation usable. Include a snippet so noisy runs
+      // can still be diagnosed.
+      logger.warn('PARSER', `Observation missing type field, using "${fallbackType}"`, {
+        correlationId,
+        snippet: obsContent.replace(/\s+/g, ' ').trim().slice(0, 120)
+      } as any);
     }
 
     // All other fields are optional - save whatever we have

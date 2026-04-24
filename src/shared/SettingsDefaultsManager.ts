@@ -39,6 +39,15 @@ export interface SettingsDefaults {
   CLAUDE_MEM_LOCAL_MAX_TOKENS: string;
   CLAUDE_MEM_LOCAL_MAX_CONCURRENT: string;  // Max parallel in-flight requests to the local server (match LM Studio queue depth)
   CLAUDE_MEM_LOCAL_FALLBACK_ENABLED: string;  // 'true' | 'false' - fall back to Claude SDK on local failure
+  CLAUDE_MEM_LOCAL_REQUEST_TIMEOUT_MS: string;  // Per-request timeout (ms) for local API calls; aborts hung LM Studio/Ollama generations
+  CLAUDE_MEM_LOCAL_ENABLE_THINKING: string;     // 'true' | 'false' — pass chat_template_kwargs.enable_thinking (Qwen3.6 and similar)
+  CLAUDE_MEM_LOCAL_TEMPERATURE: string;         // Sampling temperature
+  CLAUDE_MEM_LOCAL_TOP_P: string;               // top_p
+  CLAUDE_MEM_LOCAL_TOP_K: string;               // top_k (-1 / empty disables)
+  CLAUDE_MEM_LOCAL_MIN_P: string;               // min_p
+  CLAUDE_MEM_LOCAL_PRESENCE_PENALTY: string;    // presence_penalty
+  CLAUDE_MEM_LOCAL_REPETITION_PENALTY: string;  // repetition_penalty (llama.cpp/LM Studio)
+  CLAUDE_MEM_LOCAL_MAX_OUTPUT_TOKENS: string;   // max_tokens on the completion response
   // System Configuration
   CLAUDE_MEM_DATA_DIR: string;
   CLAUDE_MEM_LOG_LEVEL: string;
@@ -121,9 +130,20 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_LOCAL_MODEL: '',           // e.g. 'qwen/qwen3-27b' — must be set by user
     CLAUDE_MEM_LOCAL_API_KEY: '',         // optional, omitted when empty
     CLAUDE_MEM_LOCAL_MAX_CONTEXT_MESSAGES: '20',
-    CLAUDE_MEM_LOCAL_MAX_TOKENS: '80000',
+    CLAUDE_MEM_LOCAL_MAX_TOKENS: 'auto',  // 'auto' probes the local server for the loaded context window; accepts a number (e.g. '60000') to override
     CLAUDE_MEM_LOCAL_MAX_CONCURRENT: '1',  // Conservative default; raise to match LM Studio's configured parallelism
     CLAUDE_MEM_LOCAL_FALLBACK_ENABLED: 'false',  // Do not silently fall back to Claude on local failure
+    CLAUDE_MEM_LOCAL_REQUEST_TIMEOUT_MS: '300000',  // 5 minutes — generous for large-model generations, but bounded so hung servers don't block sessions
+    // Qwen3.6-27B instruct-mode defaults (vendor-recommended): thinking disabled
+    // for structured XML extraction, presence_penalty 1.5 to suppress repetition.
+    CLAUDE_MEM_LOCAL_ENABLE_THINKING: 'false',
+    CLAUDE_MEM_LOCAL_TEMPERATURE: '0.7',
+    CLAUDE_MEM_LOCAL_TOP_P: '0.8',
+    CLAUDE_MEM_LOCAL_TOP_K: '20',
+    CLAUDE_MEM_LOCAL_MIN_P: '0.0',
+    CLAUDE_MEM_LOCAL_PRESENCE_PENALTY: '1.5',
+    CLAUDE_MEM_LOCAL_REPETITION_PENALTY: '1.0',
+    CLAUDE_MEM_LOCAL_MAX_OUTPUT_TOKENS: '4096',
     // System Configuration
     CLAUDE_MEM_DATA_DIR: join(homedir(), '.claude-mem'),
     CLAUDE_MEM_LOG_LEVEL: 'INFO',

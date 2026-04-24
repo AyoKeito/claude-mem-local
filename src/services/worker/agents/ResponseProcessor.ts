@@ -62,9 +62,17 @@ export async function processAgentResponse(
   // Track generator activity for stale detection (Issue #1099)
   session.lastGeneratorActivity = Date.now();
 
-  // Add assistant response to shared conversation history for provider interop
+  // Add assistant response to shared conversation history for provider interop.
+  // Skip empty responses and placeholder "<empty_response>" turns: they carry no
+  // signal, inflate future requests, and (with strict-alternation templates like
+  // Qwen's) can cause 400 errors when they end up at the start of truncated
+  // history.
   if (text) {
-    session.conversationHistory.push({ role: 'assistant', content: text });
+    const trimmed = text.trim();
+    const isEmptyPlaceholder = /^<empty_response>\s*$/i.test(trimmed);
+    if (trimmed && !isEmptyPlaceholder) {
+      session.conversationHistory.push({ role: 'assistant', content: text });
+    }
   }
 
   // Parse observations and summary

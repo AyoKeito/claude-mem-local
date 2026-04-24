@@ -26,6 +26,7 @@ import { getProcessBySession, ensureProcessExit } from '../../ProcessRegistry.js
 import { getProjectContext } from '../../../../utils/project-name.js';
 import { normalizePlatformSource } from '../../../../shared/platform-source.js';
 import { RestartGuard } from '../../RestartGuard.js';
+import { isContextOverflowError } from '../../agents/index.js';
 
 export class SessionRoutes extends BaseRouteHandler {
   private completionHandler: SessionCompletionHandler;
@@ -271,6 +272,10 @@ export class SessionRoutes extends BaseRouteHandler {
           error: errorMsg
         }, error);
 
+        // Remember the fatal error so .finally() can refuse to retry on
+        // structurally-unfixable failures (context overflow).
+        (session as any).lastGeneratorError = error;
+
         // Mark all processing messages as failed so they can be retried or abandoned
         const pendingStore = this.sessionManager.getPendingMessageStore();
         try {
@@ -368,6 +373,22 @@ export class SessionRoutes extends BaseRouteHandler {
               return;
             }
 
+            // GUARD: Don't retry structurally-unfixable errors. A context-overflow
+            // failure means the next attempt would send the same oversized prompt
+            // and fail the same way, burning slots and triggering the restart
+            // guard. Abort the session instead and let pending messages drain.
+            const lastErr = (session as any).lastGeneratorError;
+            if (lastErr && isContextOverflowError(lastErr)) {
+              logger.error('SESSION', 'Context overflow detected — refusing to restart generator. Lower CLAUDE_MEM_LOCAL_MAX_TOKENS or CLAUDE_MEM_LOCAL_MAX_CONTEXT_MESSAGES.', {
+                sessionId: sessionDbId,
+                pendingCount,
+                error: (lastErr instanceof Error ? lastErr.message : String(lastErr)).slice(0, 300),
+              });
+              session.abortController.abort();
+              (session as any).lastGeneratorError = null;
+              return;
+            }
+
             // Windowed restart guard: only blocks tight-loop restarts, not spread-out ones (#2053)
             if (!session.restartGuard) session.restartGuard = new RestartGuard();
             const restartAllowed = session.restartGuard.recordRestart();
@@ -402,8 +423,11 @@ export class SessionRoutes extends BaseRouteHandler {
 
             this.crashRecoveryScheduled.add(sessionDbId);
 
-            // Exponential backoff: 1s, 2s, 4s for subsequent restarts
-            const backoffMs = Math.min(1000 * Math.pow(2, session.consecutiveRestarts - 1), 8000);
+            // Exponential backoff with full jitter: capped at 8s, randomized to
+            // avoid thundering-herd retries when multiple sessions hit the same
+            // dead local server simultaneously.
+            const backoffCap = Math.min(1000 * Math.pow(2, session.consecutiveRestarts - 1), 8000);
+            const backoffMs = Math.floor(Math.random() * backoffCap) + 250;
 
             // Delay before restart with exponential backoff
             setTimeout(() => {
